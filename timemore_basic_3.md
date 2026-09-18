@@ -153,9 +153,114 @@ just an unexploited capability if it turns out to be worth adding.
 5. Does weight ever arrive under `opcode 0x02` in addition to `0x01`?
 6. Do the timer commands (Finding 6) actually work if sent?
 
-## Non-goal for now
+## Hardware confirmed (2026-09-19)
 
-No code changes have been made in `../esp-arduino-ble-scales`,
-`../references/esp-arduino-ble-scales`, or `../gaggimate` as part of this
-research. This file is purely notes to pick back up once the scale is in
-hand.
+The scale arrived and was bench-tested end to end against the real
+`esp-arduino-ble-scales` driver stack, using this repo's `ble_scale_tester`
+program on an M5Stack AtomS3R. Findings below supersede the "best guess"
+framing above where they overlap.
+
+### Advertised identity
+
+- Advertises as **`Basic3 Link`** — confirmed via `bleak` on macOS and via
+  the AtomS3R's own NimBLE scan log. Not `dot`/`tes017`/anything matching the
+  old `TimemoreDotScalesPlugin::handles()` prefix check.
+- GATT Device Information service reports Manufacturer=`TIMEMORE`,
+  Model=`TES016`, Firmware=`v1.0.3`.
+- Confirms **Finding 1**: it exposes exactly the Dot service/characteristic
+  layout — `FFF0` (service), `FFF1` notify, `FFF2` write-without-response.
+  No new driver class needed, only a wider name match.
+- One thing not previously documented: it also exposes a second, unknown
+  vendor service `5833ff01-9b8b-5191-6142-22a4536ef123` with a write char
+  (`5833ff02`) and a notify char (`5833ff03`) — purpose unconfirmed, possibly
+  OTA/firmware-update or an extended vendor channel. Not touched by the
+  Dot driver and not needed for weight/tare/timer.
+
+### The scale needed an explicit factory reset + mode switch
+
+Out of the box, neither Bean Conqueror, Timemore's own iOS app, nor a plain
+macOS `bleak` GATT connect could talk to it — the device advertised (visible
+in generic scanners) but refused/timed out on every GATT connection attempt,
+from three independent BLE stacks. A **factory reset**, followed by moving
+the power switch to **M** and holding it 5s, fixed this: the scale then
+advertised as `Basic3 Link` (previously it advertised with **no local
+name at all**, which is also why the phone apps' name-based matching never
+found it) and connections started succeeding. This turned out to be
+scale-side state, not a bug in any of the three clients that failed against
+it.
+
+### Two real bugs found and fixed in `esp-arduino-ble-scales` (this repo's fork)
+
+1. **`dot.h`: `TimemoreDotScalesPlugin::handles()`** only matched a literal
+   `"TIMEMORE_Dot"` name prefix. Widened to also match (case-insensitive)
+   `basic3`, `basic 3`, or `timemore`+`basic`, mirroring Beanconqueror's
+   `TimemoreBasicScale.test()`. Confirmed this is enough — no other Dot code
+   needed to change for weight streaming to work over the real Basic 3.0
+   Link.
+2. **`remote_scales.cpp`: `RemoteScalesScanner::onResult()`** had a dedupe
+   race, unrelated to any specific scale driver. It marked a BLE address as
+   "already seen" (LRU cache) on the **first** `onResult()` callback for that
+   address, before checking whether any plugin's `handles()` matched. Many
+   peripherals (this scale included, apparently) send their local name in a
+   separate scan-response packet rather than the primary advertisement; the
+   first callback for such a device arrives nameless, fails
+   `containsPluginForDevice()`, but still gets cached as "seen" — silently
+   blacklisting that address for the rest of the scan session even once the
+   scan-response packet with the real name arrives on a later callback for
+   the same `NimBLEAdvertisedDevice`. Fixed by only inserting into the LRU
+   cache once a plugin has actually matched. Reproduced this in the wild:
+   one test session scanned continuously for 45s, logged hundreds of
+   `Duplicate; updated` events at the NimBLE layer for the scale's address,
+   and never once surfaced a `[main] Found 'Basic3 Link'` line — until the
+   fix went in.
+
+Also needed, in `ble_scale_tester`'s own `main.cpp` (not the driver): an
+explicit `NimBLEDevice::init()`/`setPower()`/`setMTU(256)` call in `setup()`.
+GaggiMate's `BLEScalePlugin` never calls this itself — it relies on
+`BleClientTransport::init()` (`gaggimate/lib/NanoPbComm/src/ble/BleClientTransport.cpp`)
+having already brought up the NimBLE stack for the display↔controller link
+first. This standalone tester has no such transport, so without an explicit
+init call the scanner silently saw zero advertisements of anything, from any
+device.
+
+### Live weight streaming confirmed working
+
+With both fixes in place, `ble_scale_tester` discovers `Basic3 Link`,
+connects, performs the handshake, and streams accurate weight: a clean
+put/settle/remove cycle (cup, 95.7g) tracked smoothly
+0 → 1.7 → 16.2 → 37.9 → 80.1 → 96.4 → settling at 95.7 → back down to a
+stable 0.00g, matching the scale's own display throughout.
+
+### Still open
+
+- **Unhandled frames** seen post-connect: `cls=03 type=0D len=1` (the
+  handshake response — see Finding 3's tare/handshake mislabeling theory,
+  still unconfirmed) and `cls=01 type=04 len=5` (likely timer or flow-rate
+  data; not needed since GaggiMate computes flow rate itself rather than
+  reading it from the scale).
+- **One observed stuck-weight episode**: during a session with rapid
+  weight swings (up to ~20g back and forth, including negative dips), the
+  reported weight froze at exactly `-16.00 g` for roughly 80 consecutive
+  notifications while the scale's own display showed `0.0`. Not reproduced
+  on a later, gentler put/remove test, so root cause is still unknown — raw
+  notification bytes were not captured during the actual stuck episode
+  (only during the later, clean repro attempt). Worth another pass with the
+  `[raw]` hex-dump instrumentation left in for that purpose if it recurs
+  (temporarily re-added to `dot.cpp`'s `notifyCallback()` during this
+  session, then reverted since it didn't catch a repeat).
+- Open questions 2–4 and 6 from the original research (CRC16 init value,
+  whether the handshake frame is really a tare, whether Beanconqueror's
+  shorter handshake sequence is sufficient — it appears to be, since
+  `dot.cpp` already only sends the short sequence and weight streams fine —
+  and whether timer commands work) remain unverified; only weight streaming
+  and basic connect/reconnect were exercised so far, not `tare`/`start`/
+  `stop`/`reset`.
+
+## Next steps
+
+- Try to force-reproduce the stuck-weight bug (rapid oscillation, or a
+  `tare` command mid-swing) with the raw hex-dump instrumentation active.
+- Exercise `tare`/`start`/`stop`/`reset` via `ble_scale_tester`'s serial
+  commands against the real scale.
+- Raise a PR upstream for the `dot.h` name-match widening and the
+  `remote_scales.cpp` scanner dedupe fix.

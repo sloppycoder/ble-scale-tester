@@ -23,6 +23,7 @@
 // silent), prints "waiting for scale..." every 3 seconds.
 
 #include <Arduino.h>
+#include <NimBLEDevice.h>
 #include <memory>
 
 #include <remote_scales.h>
@@ -246,6 +247,15 @@ void handleSerialCommands() {
 void setup() {
     Serial.begin(115200);
     Serial.println("=== ble_scale_tester ===");
+
+    // GaggiMate never calls this in BLEScalePlugin itself -- it relies on
+    // BleClientTransport::init() (lib/NanoPbComm/src/ble/BleClientTransport.cpp)
+    // having already brought up the NimBLE stack for the display<->controller
+    // link before scale scanning starts. This standalone test program has no
+    // such transport, so it has to init NimBLE itself.
+    NimBLEDevice::init("ble-scale-tester");
+    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+    NimBLEDevice::setMTU(256);
 
     registerScalePlugins();
     scanner = new RemoteScalesScanner();
