@@ -21,8 +21,14 @@
 //
 // If no weight has been received (no scale connected yet, or connected but
 // silent), prints "waiting for scale..." every 3 seconds.
+//
+// The AtomS3R's own screen and programmable button make it possible to test
+// standalone, with nothing attached to the Mac side: the screen shows "No
+// scale" until a scale connects, then the live weight refreshed every 100ms;
+// holding the button for 3s reboots the board.
 
 #include <Arduino.h>
+#include <M5Unified.h>
 #include <NimBLEDevice.h>
 #include <memory>
 
@@ -45,12 +51,18 @@
 namespace {
 
 constexpr unsigned long WAIT_MESSAGE_INTERVAL_MS = 3000;
+// 100ms is Nielsen's classic threshold for an update feeling instantaneous;
+// also roughly matches the scale's own BLE notification rate, so refreshing
+// faster wouldn't show anything new.
+constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 100;
+constexpr uint32_t REBOOT_BUTTON_HOLD_MS = 3000;
 
 RemoteScalesScanner *scanner = nullptr;
 std::unique_ptr<RemoteScales> scale;
 
 unsigned long lastWeightMs = 0;
 unsigned long lastWaitMessageMs = 0;
+unsigned long lastDisplayMs = 0;
 
 void onScaleLog(std::string message) {
     if (!message.empty()) {
@@ -79,11 +91,38 @@ void registerScalePlugins() {
     myscalePlugin::apply();
 }
 
+void renderDisplay() {
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setCursor(4, 50);
+    if (scale && scale->isConnected()) {
+        M5.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+        M5.Display.setTextSize(3);
+        M5.Display.printf("%.1fg", scale->getWeight());
+    } else {
+        M5.Display.setTextColor(TFT_RED, TFT_BLACK);
+        M5.Display.setTextSize(2);
+        M5.Display.println("No scale");
+    }
+}
+
+void checkRebootButton() {
+    if (!M5.BtnA.pressedFor(REBOOT_BUTTON_HOLD_MS)) return;
+    Serial.println("[main] Button held, rebooting");
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setCursor(4, 50);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.setTextSize(2);
+    M5.Display.println("Rebooting");
+    delay(200);
+    ESP.restart();
+}
+
 void disconnectScale() {
     if (!scale) return;
     scale->disconnect();
     scale.reset();
     lastWeightMs = 0;
+    renderDisplay();
 }
 
 void tryConnectToDiscovered() {
@@ -114,6 +153,7 @@ void tryConnectToDiscovered() {
     }
 
     Serial.println("[main] Connected.");
+    renderDisplay();
 }
 
 // Mirrors BLEScalePlugin::onProcessStart() exactly: tare twice with a short
@@ -245,6 +285,10 @@ void handleSerialCommands() {
 } // namespace
 
 void setup() {
+    auto cfg = M5.config();
+    cfg.serial_baudrate = 0; // we call Serial.begin() ourselves, for native USB CDC
+    M5.begin(cfg);
+
     Serial.begin(115200);
     Serial.println("=== ble_scale_tester ===");
 
@@ -263,9 +307,13 @@ void setup() {
 
     printHelp();
     Serial.println("Scanning for scales...");
+    renderDisplay();
 }
 
 void loop() {
+    M5.update();
+    checkRebootButton();
+
     handleSerialCommands();
 
     if (scale) {
@@ -275,6 +323,7 @@ void loop() {
             if (scanner != nullptr) {
                 scanner->initializeAsyncScan();
             }
+            renderDisplay();
         } else {
             scale->update();
         }
@@ -288,6 +337,11 @@ void loop() {
         if (lastWeightMs == 0) {
             Serial.println("waiting for scale...");
         }
+    }
+
+    if (now - lastDisplayMs >= DISPLAY_REFRESH_INTERVAL_MS) {
+        lastDisplayMs = now;
+        renderDisplay();
     }
 
     delay(20);
