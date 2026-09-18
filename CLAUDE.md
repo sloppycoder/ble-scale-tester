@@ -16,15 +16,21 @@ emulator) is broadcasting.
 
 ## Primary dev board
 
-**Seeed Studio XIAO ESP32S3**
-- PlatformIO board id: `seeed_xiao_esp32s3` (already resolvable — installed
-  locally, confirmed via `pio boards seeed_xiao_esp32s3`)
-- ESP32-S3, native USB (USB-CDC), no separate USB-serial chip/driver needed
-  on macOS — set `-DARDUINO_USB_CDC_ON_BOOT=1` so `Serial`/logs come over the
-  native USB port
-- Also used elsewhere in the sibling repo as `env:display-headless-8m` in
-  `../gaggimate/platformio.ini`, so its board profile/flags are a known-good
-  reference
+**M5Stack AtomS3R** ([docs](https://docs.m5stack.com/en/core/AtomS3R))
+- ESP32-S3-PICO-1-N8R8, 8MB flash, 8MB octal PSRAM (PSRAM unused by this
+  BLE-only test firmware)
+- PlatformIO board id: **no dedicated `m5stack-atoms3r` profile exists yet**
+  in this platform install (`pio boards | grep -i atom`), so this repo builds
+  it as `board = m5stack-atoms3` — same ESP32-S3, native-USB-CDC layout, 8MB
+  flash; the AtomS3R's extra PSRAM/IMU/display/ToF pins are simply unused by
+  this program
+- Native USB (USB-CDC), no separate USB-serial chip/driver needed on macOS —
+  set `-DARDUINO_USB_CDC_ON_BOOT=1` so `Serial`/logs come over the native USB
+  port
+- Previously bench-tested on a Seeed Studio XIAO ESP32S3
+  (`seeed_xiao_esp32s3`, also used as `env:display-headless-8m` in
+  `../gaggimate/platformio.ini`); that board profile remains a known-good
+  reference if switching back
 
 ## Sibling repos (context, not vendored into this repo)
 
@@ -56,7 +62,7 @@ pin to **1.4.x** to match what GaggiMate actually runs.
 2. **Python 3** — required by PlatformIO itself (already present:
    Python 3.14 on this machine, plus PlatformIO's bundled `penv`).
 3. **A USB-C cable** (data-capable, not charge-only) to flash/monitor the
-   XIAO ESP32S3.
+   AtomS3R.
 4. **NimBLE-Arduino library, pinned to `^1.4.0`** — declare it in this
    project's `platformio.ini` `lib_deps` so the emulator speaks the same
    NimBLE API version GaggiMate uses.
@@ -83,9 +89,9 @@ pin to **1.4.x** to match what GaggiMate actually runs.
 ## Suggested `platformio.ini` starting point
 
 ```ini
-[env:xiao_esp32s3]
+[env:m5stack_atoms3r]
 platform = espressif32@6.12.0
-board = seeed_xiao_esp32s3
+board = m5stack-atoms3
 framework = arduino
 monitor_speed = 115200
 build_unflags = -std=gnu++11
@@ -105,7 +111,7 @@ lib_deps =
 
 ```sh
 pio run                          # build
-pio run -t upload                # flash the XIAO ESP32S3
+pio run -t upload                # flash the AtomS3R
 pio device monitor               # serial monitor
 pio run -t upload -t monitor     # flash then monitor
 ```
