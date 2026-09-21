@@ -40,17 +40,27 @@ emulator) is broadcasting.
 | `../esp-arduino-ble-scales` | The BLE scale client library GaggiMate depends on. `src/scales/*.{h,cpp}` has one class per supported scale (Acaia, Bookoo, Decent, Difluid, Eclair, Eureka, Felicita, Timemore, Varia, WeighMyBrew, MyScale, Dot) — each documents that scale's GATT service/characteristic UUIDs and wire protocol. **This is the spec to read when writing an emulator** for a given scale. |
 | `../references/esp-arduino-ble-scales` | This is the form of the same scale plugin from [gaggiuino](https://gaggiuino.github.io/#/) project. It contains Timremore dot support and we may need to borrow some code from it |
 
-GaggiMate pulls the scales library via
-`https://github.com/gaggimate/esp-arduino-ble-scales#v1.0.2` (a pinned tag),
-not the local checkout — check that tag's source if behavior needs to match
-production exactly rather than the local `main`/`v4` checkouts.
+GaggiMate `master` pulls the scales library via
+`https://github.com/gaggimate/esp-arduino-ble-scales#v1.0.3` (a pinned tag cut
+from the library's **`v1.x`** branch), not the local checkout. This tester
+builds against the local sibling checkout instead, which **must be on `v1.x`
+or a branch based on it** so it matches what GaggiMate `master` builds.
 
-⚠️ Version note: GaggiMate's own `platformio.ini` pins
-`h2zero/NimBLE-Arduino@^1.4.0`, while `esp-arduino-ble-scales`'s own
-standalone `platformio.ini` (used for its compile-check env) pins
-`h2zero/NimBLE-Arduino@^2.5.0`. NimBLE-Arduino 1.x and 2.x have API
-differences. When emulating a peripheral to be discovered by GaggiMate,
-pin to **1.4.x** to match what GaggiMate actually runs.
+The library's `main` branch is a separate line for the NimBLE 2.x /
+pioarduino migration (`feature/pioarduino-move` in gaggimate, not yet on
+`master`). It does not compile against NimBLE-Arduino 1.4.x, so it cannot be
+used with this tester's current toolchain.
+
+`v1.x` has no `library.json`, so a `symlink://` entry in `lib_deps` fails with
+`MissingPackageManifestError`. `platformio.ini` uses
+`lib_extra_dirs = lib_links` instead, where
+`lib_links/esp-arduino-ble-scales` is a symlink to the sibling checkout. If a
+stale `.pio/libdeps/*/esp-arduino-ble-scales.pio-link` from an older config
+triggers the same error, delete that file.
+
+Toolchain matches GaggiMate `master`: `espressif32@6.12.0`,
+`h2zero/NimBLE-Arduino@^1.4.0`, `-std=gnu++17`, plus its
+`CONFIG_NIMBLE_CPP_LOG_LEVEL` / `CONFIG_BT_NIMBLE_PINNED_TO_CORE` flags.
 
 ## Tools required to write/run a test program
 
