@@ -25,7 +25,9 @@
 // The AtomS3R's own screen and programmable button make it possible to test
 // standalone, with nothing attached to the Mac side: the screen shows "No
 // scale" until a scale connects, then the live weight refreshed every 100ms;
-// holding the button for 3s reboots the board.
+// a short press of the button sends the same double-tare as the serial "tare"
+// command (the screen briefly shows "TARE" or "TARE FAIL"); holding the button
+// for 3s reboots the board.
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -56,6 +58,7 @@ constexpr unsigned long WAIT_MESSAGE_INTERVAL_MS = 3000;
 // faster wouldn't show anything new.
 constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 100;
 constexpr uint32_t REBOOT_BUTTON_HOLD_MS = 3000;
+constexpr unsigned long TARE_MESSAGE_MS = 1500;
 
 RemoteScalesScanner *scanner = nullptr;
 std::unique_ptr<RemoteScales> scale;
@@ -63,6 +66,11 @@ std::unique_ptr<RemoteScales> scale;
 unsigned long lastWeightMs = 0;
 unsigned long lastWaitMessageMs = 0;
 unsigned long lastDisplayMs = 0;
+
+// Transient status line under the weight, set by doTare().
+const char *tareMessage = nullptr;
+uint16_t tareMessageColor = TFT_WHITE;
+unsigned long tareMessageUntilMs = 0;
 
 void onScaleLog(std::string message) {
     if (!message.empty()) {
@@ -98,6 +106,12 @@ void renderDisplay() {
         M5.Display.setTextColor(TFT_GREEN, TFT_BLACK);
         M5.Display.setTextSize(3);
         M5.Display.printf("%.1fg", scale->getWeight());
+        if (tareMessage != nullptr && millis() < tareMessageUntilMs) {
+            M5.Display.setCursor(4, 90);
+            M5.Display.setTextColor(tareMessageColor, TFT_BLACK);
+            M5.Display.setTextSize(2);
+            M5.Display.print(tareMessage);
+        }
     } else {
         M5.Display.setTextColor(TFT_RED, TFT_BLACK);
         M5.Display.setTextSize(2);
@@ -156,6 +170,13 @@ void tryConnectToDiscovered() {
     renderDisplay();
 }
 
+void showTareMessage(const char *message, uint16_t color) {
+    tareMessage = message;
+    tareMessageColor = color;
+    tareMessageUntilMs = millis() + TARE_MESSAGE_MS;
+    renderDisplay();
+}
+
 // Mirrors BLEScalePlugin::onProcessStart() exactly: tare twice with a short
 // delay, re-checking connectivity in between, since some drivers only zero
 // reliably on the second command.
@@ -165,11 +186,12 @@ void doTare() {
         return;
     }
     Serial.println("[main] tare() x2 (mirrors BLEScalePlugin::onProcessStart)");
-    scale->tare();
+    bool ok = scale->tare();
     delay(50);
     if (scale && scale->isConnected()) {
-        scale->tare();
+        ok = scale->tare() && ok;
     }
+    showTareMessage(ok ? "TARE" : "TARE FAIL", ok ? TFT_YELLOW : TFT_RED);
 }
 
 void doStartTimer() {
@@ -313,6 +335,9 @@ void setup() {
 void loop() {
     M5.update();
     checkRebootButton();
+    if (M5.BtnA.wasClicked()) {
+        doTare();
+    }
 
     handleSerialCommands();
 
